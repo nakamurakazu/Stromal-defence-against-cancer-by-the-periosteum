@@ -1,0 +1,117 @@
+# CPU core
+options(mc.cores = parallel::detectCores())
+options(future.globals.maxSize = 3000 * 1024^2)
+set.seed(1234567)
+#Library
+library(RColorBrewer)
+library(pheatmap)
+library(tidyverse)
+library(data.table)
+library(dplyr)
+library(annotables)
+library(ggplot2)
+library(multtest)
+library(Seurat)
+library(R.utils)
+library(rhdf5)
+library(Ecfun)
+library(sctransform)
+library(scater)
+library(scran)
+library(SingleCellExperiment)
+library(gplots)
+library(ggbeeswarm)
+library(ggthemes)
+library(slingshot)
+library(gam)
+library(viridis)
+library(autoimage)
+library (clusterExperiment)
+library(tximport)
+library(ggplot2)
+library(ggVennDiagram)
+library(cowplot)
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(biomaRt)
+
+
+# Read Control
+CT<- Read10X(data.dir = "./Data/Control")
+
+# Read Scratch Posotive
+SCP <- Read10X(data.dir = "./Data/Scratchpositive")
+
+# Read Scratch Negative
+SCN <- Read10X(data.dir = "./Data/Scratchnegative/")
+
+# Read modified data
+seuset_CT <- CreateSeuratObject(counts = CT, min.cells = 3, min.features = 200, project = "CT")
+seuset_CT$group <-"CT"
+
+seuset_SCN <- CreateSeuratObject(counts = SCN, min.cells = 3, min.features = 200, project = "SCN")
+seuset_SCN$group <-"SCN"
+
+seuset_SCP <- CreateSeuratObject(counts = SCP, min.cells = 3, min.features = 200, project = "SCP")
+seuset_SCP$group <-"SCP"
+
+# QC and selecting cells for further analysis
+# The number of features and UMIs (nFeature_RNA and nCount_RNA) are automatically calculated for every object by Seurat.
+seuset_CT[["percent.mt"]] <- PercentageFeatureSet(object = seuset_CT, pattern = "^mt-")
+seuset_SCN[["percent.mt"]] <- PercentageFeatureSet(object = seuset_SCN, pattern = "^mt-")
+seuset_SCP[["percent.mt"]] <- PercentageFeatureSet(object = seuset_SCP, pattern = "^mt-")
+
+# Expression QC #We should check
+VlnPlot(object = seuset_CT, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+VlnPlot(object = seuset_SCN, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+VlnPlot(object = seuset_SCP, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+# Filtering(before merge)
+# nCount_RNA is to high (maybe pragment)
+seuset_CT <- subset(x = seuset_CT, subset = nFeature_RNA < 7000 & nCount_RNA < 50000 & percent.mt < 5)
+seuset_SCN <- subset(x = seuset_SCN, subset = nFeature_RNA < 7000 & nCount_RNA < 50000 & percent.mt < 5)
+seuset_SCP <- subset(x = seuset_SCP, subset = nFeature_RNA < 7000 & nCount_RNA < 50000 & percent.mt < 5)
+
+saveRDS(seuset_CT,"./Save/seuset_CT.RDS")
+saveRDS(seuset_SCN,"./Save/seuset_SCN.RDS")
+saveRDS(seuset_SCP,"./Save/seuset_SCP.RDS")
+
+seuset_CT <-readRDS("./Save/seuset_CT.RDS")
+seuset_SCN <-readRDS("./Save/seuset_SCN.RDS")
+seuset_SCP <-readRDS("./Save/seuset_SCP.RDS")
+
+# Merge seurat object
+seuset <- merge(x= seuset_CT, y = c(seuset_SCN, seuset_SCP))
+
+# Merge way
+seuset <- SCTransform(seuset, vars.to.regress = "percent.mt", verbose = FALSE)
+
+# PCA, UMAP
+seuset <- RunPCA(object = seuset, verbose = FALSE)
+seuset <- RunUMAP(object = seuset, dims = 1:30)
+seuset <- FindNeighbors(object = seuset, dims = 1:30)
+
+#saveRDS
+saveRDS(seuset,"./Save/merge.RDS")
+seuset <- readRDS("./Save/merge.RDS")
+
+#FindNeighbors
+seuset_1 <- FindClusters(seuset, verbose = FALSE, resolution = 0.3)
+table(seuset_1@active.ident)
+
+#perform UMAP
+DimPlot(object = seuset_1, label = TRUE)
+DimPlot(seuset_1, group.by = "group")
+DimPlot(seuset_1, split.by = "group")
+
+# DefaultAssay
+DefaultAssay(object = seuset_1) <- "RNA"
+seuset_1 <- NormalizeData(seuset_1, verbose = FALSE)
+
+# Markers
+markers_merge <- FindAllMarkers(object = seuset_1, only.pos = T, min.pct = 0.1, logfc.threshold = 0.25)
+markers_merge <- subset(markers_merge, markers_merge$p_val_adj < 0.05)
+markers_merge <- dplyr ::arrange(markers_merge, desc(markers_merge$avg_log2FC))
+markers_merge <- dplyr ::arrange(markers_merge, markers_merge$cluster)
+write.table(markers_merge,"./Output/markers_merge_0.3.txt", sep="\t", quote=FALSE, row.names=FALSE)
